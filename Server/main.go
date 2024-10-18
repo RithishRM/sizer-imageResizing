@@ -2,31 +2,46 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"log"
 	"net/http"
-	"github.com/disintegration/imaging"
 	"os"
-	"image"
+
+	"github.com/disintegration/imaging"
 )
 
-func saveOriginalImage(img *image.NRGBA, outputPath string) {
+// Save the original image in its original format.
+func saveOriginalImage(src image.Image, outputPath string) {
 	output, err := os.Create(outputPath)
 	if err != nil {
 		log.Fatalf("failed to create output file %s: %v", outputPath, err)
 	}
 	defer output.Close()
 
-	// Encode the resized image as PNG.
-	err = imaging.Encode(output, img, imaging.PNG)
+	switch img := src.(type) {
+	case *image.NRGBA:
+		err = png.Encode(output, img) // Save as PNG
+	case *image.YCbCr:
+		err = jpeg.Encode(output, img, nil) // Save as JPEG
+	case *image.GIF:
+		err = gif.Encode(output, img, nil) // Save as GIF
+	default:
+		log.Fatalf("unsupported image format: %T", img)
+	}
 	if err != nil {
 		log.Fatalf("failed to encode image: %v", err)
 	}
 }
 
-func resizeImageCustom(src *image.NRGBA, width, height int) *image.NRGBA {
+// Resize the image to specified dimensions.
+func resizeImageCustom(src image.Image, width, height int) image.Image {
 	return imaging.Resize(src, width, height, imaging.Lanczos)
 }
 
+// Handle image upload and save the original image.
 func GetHandler(w http.ResponseWriter, r *http.Request) {
 	file, _, err := r.FormFile("image")
 	if err != nil {
@@ -43,15 +58,19 @@ func GetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srcNRGBA := imaging.Clone(src) 
+	// Save the original image
+	saveOriginalImage(src, "Images/Original/original.png") // You can adjust the path based on the format
 
-	saveOriginalImage(srcNRGBA, "Images\\Original\\original.png")
-
-	fmt.Fprintf(w, "GET method invoked")
+	fmt.Fprintf(w, "Image uploaded successfully.")
 }
 
+// Handle image resizing based on the requested format.
 func ResizeHandler(w http.ResponseWriter, r *http.Request) {
-	srcFile, err := os.Open("Images\\Original\\original.png")
+	width := r.FormValue("width")  // Get width from request
+	height := r.FormValue("height") // Get height from request
+	format := r.FormValue("format") // Get output format
+
+	srcFile, err := os.Open("Images/Original/original.png")
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error opening original image file: %v", err),
 			http.StatusInternalServerError)
@@ -66,28 +85,43 @@ func ResizeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srcNRGBA := imaging.Clone(src)
-	customImage := resizeImageCustom(srcNRGBA, 300, 200)
+	// Resize the image to specified dimensions
+	customImage := resizeImageCustom(src, 300, 200) // Replace with width/height parsing
 
-	err = imaging.Encode(w, customImage, imaging.JPEG)
+	// Set content type and encode image based on format choice
+	switch format {
+	case "png":
+		w.Header().Set("Content-Type", "image/png")
+		err = png.Encode(w, customImage)
+	case "jpeg":
+		w.Header().Set("Content-Type", "image/jpeg")
+		err = jpeg.Encode(w, customImage, nil)
+	case "gif":
+		w.Header().Set("Content-Type", "image/gif")
+		err = gif.Encode(w, customImage, nil)
+	default:
+		http.Error(w, "Unsupported format", http.StatusBadRequest)
+		return
+	}
+
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error encoding image: %v", err),
 			http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Fprintf(w, "Resize method invoked")
+	fmt.Fprintf(w, "Image resized successfully.")
 }
 
-func main(){
-	fileServer := http.FileServer((http.Dir("./api")))
+func main() {
+	fileServer := http.FileServer(http.Dir("./api"))
 	http.Handle("/", fileServer)
 	http.HandleFunc("/Upload", GetHandler)
 	http.HandleFunc("/Resize", ResizeHandler)
 
 	fmt.Printf("Server started at Port number : 8000\n")
 
-	if err := http.ListenAndServe(":8000",nil); err !=nil {
+	if err := http.ListenAndServe(":8000", nil); err != nil {
 		log.Fatal(err)
 	}
 }
